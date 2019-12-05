@@ -78,18 +78,34 @@ fn main() -> Result<(), Error> {
         }
         "get" => {
             let acc_name = args.next().ok_or(Error::GetArgs)?;
-            let text = args.next().ok_or(Error::GetArgs)?;
+            let txt = args.next().ok_or(Error::GetArgs)?;
             let matched_accs = valid_lines.filter(|line| line[1] == acc_name);
             let n_matches = matched_accs.clone().count();
             if n_matches != 1 {
                 return Err(Error::Mismatch(n_matches, acc_name));
             }
             let acc = &matched_accs.collect::<Vec<Vec<&str>>>()[0];
-            let text = text
-                .replace("%L", acc[2])
-                .replace("%U", acc[3])
-                .replace("%P", acc[4]);
-            println!("{}", text);
+            let mut iter = txt.chars();
+            let mut out = String::new();
+            while let Some(c) = iter.next() {
+                match c {
+                    '%' => match iter.next() {
+                        Some('L') => out.push_str(acc[2]),
+                        Some('U') => out.push_str(acc[3]),
+                        Some('P') => out.push_str(acc[4]),
+                        Some(c2) => {
+                            out.push(c);
+                            out.push(c2);
+                        }
+                        None => {
+                            out.push(c);
+                            break;
+                        }
+                    },
+                    _ => out.push(c),
+                }
+            }
+            println!("{}", out);
         }
         _ => return Err(Error::UnknownCommand(cmd)),
     }
