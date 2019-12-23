@@ -18,12 +18,13 @@ enum Error {
     PWGenDied,
     Mismatch(usize, String),
     GetArgs,
+    LsArgs,
 }
 
 impl Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::MissingCommand => write!(f, "missing command: check, gen, get"),
+            Error::MissingCommand => write!(f, "missing command: check, gen, get, ls"),
             Error::UnknownCommand(cmd) => write!(f, "unknown command: {}", cmd),
             Error::PassFile(err) => write!(f, "error reading password file: {}", err),
             Error::PWGenSpawn(err) => write!(f, "error running pwgen: {}", err),
@@ -32,8 +33,34 @@ impl Debug for Error {
             Error::PWGenDied => write!(f, "pwgen died from a signal"),
             Error::Mismatch(n, key) => write!(f, "found {} matches for {}", n, key),
             Error::GetArgs => write!(f, "get expects 2 arguments: key and format string"),
+            Error::LsArgs => write!(f, "ls expects 2 arguments: key and format string"),
         }
     }
+}
+
+fn fmt_line(fmt: &str, acc: &[&str]) -> String {
+    let mut iter = fmt.chars();
+    let mut out = String::new();
+    while let Some(c) = iter.next() {
+        match c {
+            '%' => match iter.next() {
+                Some('N') => out.push_str(acc[1]),
+                Some('L') => out.push_str(acc[2]),
+                Some('U') => out.push_str(acc[3]),
+                Some('P') => out.push_str(acc[4]),
+                Some(c2) => {
+                    out.push(c);
+                    out.push(c2);
+                }
+                None => {
+                    out.push(c);
+                    break;
+                }
+            },
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn main() -> Result<(), Error> {
@@ -50,7 +77,7 @@ fn main() -> Result<(), Error> {
         .map(|line| line.split_whitespace().collect::<Vec<&str>>());
     let valid_lines = lines.clone().filter(|line| line[0] == "+");
     match cmd.as_str() {
-        "check" => {
+        "ck" | "check" => {
             let valid_pws = valid_lines.count();
             let invalid_pws = lines.clone().filter(|line| line[0] == "-").count();
             let change_pws = lines.clone().filter(|line| line[0] == "*").count();
@@ -61,7 +88,7 @@ fn main() -> Result<(), Error> {
                 valid_pws, invalid_pws, change_pws
             );
         }
-        "gen" => {
+        "gen" | "generate" => {
             let exit_status = process::Command::new("pwgen")
                 .args(&["-c", "-n", "-y", "-s", "-B", "-1", "34", "1"])
                 .spawn()
@@ -78,34 +105,24 @@ fn main() -> Result<(), Error> {
         }
         "get" => {
             let acc_name = args.next().ok_or(Error::GetArgs)?;
-            let txt = args.next().ok_or(Error::GetArgs)?;
+            let fmt = args.next().ok_or(Error::GetArgs)?;
             let matched_accs = valid_lines.filter(|line| line[1] == acc_name);
             let n_matches = matched_accs.clone().count();
             if n_matches != 1 {
                 return Err(Error::Mismatch(n_matches, acc_name));
             }
             let acc = &matched_accs.collect::<Vec<Vec<&str>>>()[0];
-            let mut iter = txt.chars();
-            let mut out = String::new();
-            while let Some(c) = iter.next() {
-                match c {
-                    '%' => match iter.next() {
-                        Some('L') => out.push_str(acc[2]),
-                        Some('U') => out.push_str(acc[3]),
-                        Some('P') => out.push_str(acc[4]),
-                        Some(c2) => {
-                            out.push(c);
-                            out.push(c2);
-                        }
-                        None => {
-                            out.push(c);
-                            break;
-                        }
-                    },
-                    _ => out.push(c),
-                }
+            println!("{}", fmt_line(&fmt, acc));
+        }
+        "ls" | "list" => {
+            let query = args.next().ok_or(Error::LsArgs)?;
+            let fmt = args.next().ok_or(Error::LsArgs)?;
+            let matched_accs = valid_lines
+                .filter(|line| line[1].to_lowercase().contains(&query.to_lowercase()))
+                .collect::<Vec<Vec<&str>>>();
+            for acc in matched_accs.iter() {
+                println!("{}", fmt_line(&fmt, acc));
             }
-            println!("{}", out);
         }
         _ => return Err(Error::UnknownCommand(cmd)),
     }
