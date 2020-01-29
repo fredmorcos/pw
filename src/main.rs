@@ -1,6 +1,6 @@
 #![warn(clippy::all)]
 
-use log::{debug, info};
+use log::info;
 use std::fmt::{self, Debug};
 use std::fs;
 use std::io::{self, Read};
@@ -45,8 +45,18 @@ enum Error {
     LogInit(#[from] log::SetLoggerError),
     #[error("Could not read password file: {0}")]
     PassFile(io::Error),
-    #[error("Could not parse entry, invalid marker {0}")]
-    InvalidEntry(String),
+    #[error("Invalid entry at line {0}, missing marker")]
+    MissingMarker(usize),
+    #[error("Invalid entry at line {0}, missing name")]
+    MissingName(usize),
+    #[error("Invalid entry at line {0}, missing link")]
+    MissingLink(usize),
+    #[error("Invalid entry at line {0}, missing username")]
+    MissingUsername(usize),
+    #[error("Invalid entry at line {0}, missing password")]
+    MissingPassword(usize),
+    #[error("Invalid entry at line {0}, invalid marker {0}")]
+    InvalidEntryMarker(usize, String),
     #[error("Could not run pwgen: {0}")]
     PwGenSpawn(io::Error),
     #[error("Could not wait on pwgen process: {0}")]
@@ -63,26 +73,28 @@ enum Error {
     PwGenStdoutErr(io::Error),
     #[error("Process pwgen died from a signal")]
     PwGenDied,
-    #[error("Found {0} matches for {1}")]
-    Mismatch(usize, String),
+    #[error("Found more than 1 match for {0}")]
+    Mismatch(String),
+    #[error("No matches found for {0}")]
+    NoMatches(String),
 }
 
 impl Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error: {}", self)
+        write!(f, "{}", self)
     }
 }
 
-fn fmt_line(fmt: &str, acc: &[&str]) -> String {
+fn fmt_entry(fmt: &str, entry: EntryData) -> String {
     let mut iter = fmt.chars();
     let mut out = String::new();
     while let Some(c) = iter.next() {
         match c {
             '%' => match iter.next() {
-                Some('N') => out.push_str(acc[1]),
-                Some('L') => out.push_str(acc[2]),
-                Some('U') => out.push_str(acc[3]),
-                Some('P') => out.push_str(acc[4]),
+                Some('N') => out.push_str(entry.name),
+                Some('L') => out.push_str(entry.link),
+                Some('U') => out.push_str(entry.username),
+                Some('P') => out.push_str(entry.password),
                 Some(c2) => {
                     out.push(c);
                     out.push(c2);
@@ -98,17 +110,56 @@ fn fmt_line(fmt: &str, acc: &[&str]) -> String {
     out
 }
 
-fn parse<'a>(data: &'a str) -> Vec<Vec<&str>> {
-    let lines: Vec<Vec<&str>> = data
-        .lines()
-        .filter(|line| {
+#[derive(Debug)]
+struct EntryData<'a> {
+    name: &'a str,
+    link: &'a str,
+    username: &'a str,
+    password: &'a str,
+}
+
+impl<'a> EntryData<'a> {
+    fn parse(num: usize, mut iter: impl Iterator<Item = &'a str>) -> Result<Self, Error> {
+        Ok(EntryData {
+            name: iter.next().ok_or_else(|| Error::MissingName(num))?,
+            link: iter.next().ok_or_else(|| Error::MissingLink(num))?,
+            username: iter.next().ok_or_else(|| Error::MissingUsername(num))?,
+            password: iter.next().ok_or_else(|| Error::MissingPassword(num))?,
+        })
+    }
+}
+
+enum Entry<'a> {
+    Valid(EntryData<'a>),
+    Invalid(EntryData<'a>),
+    Change(EntryData<'a>),
+}
+
+impl<'a> Entry<'a> {
+    fn parse(num: usize, mut iter: impl Iterator<Item = &'a str>) -> Result<Self, Error> {
+        let marker = iter.next().ok_or_else(|| Error::MissingMarker(num))?;
+        let data = EntryData::parse(num, iter)?;
+        match marker {
+            "+" => Ok(Entry::Valid(data)),
+            "-" => Ok(Entry::Invalid(data)),
+            "*" => Ok(Entry::Change(data)),
+            _ => Err(Error::InvalidEntryMarker(num, marker.to_string())),
+        }
+    }
+}
+
+fn parse(data: &str) -> impl Iterator<Item = Result<Entry, Error>> {
+    data.lines()
+        .enumerate()
+        .filter(|(_, line)| {
             let line = line.trim();
             !line.is_empty() && !line.starts_with('#')
         })
-        .map(|line| line.split_whitespace().collect())
-        .collect();
-    debug!("{} password lines found", lines.len());
-    lines
+        .map(|(num, line)| Entry::parse(num + 1, line.split_whitespace()))
+}
+
+fn read() -> Result<String, Error> {
+    fs::read_to_string(PASSFILE).map_err(Error::PassFile)
 }
 
 fn main() -> Result<(), Error> {
@@ -126,20 +177,17 @@ fn main() -> Result<(), Error> {
 
     match opt.command {
         Cmd::Check => {
-            let data = fs::read_to_string(PASSFILE).map_err(Error::PassFile)?;
-            let lines = parse(&data);
+            let data = read()?;
+            let entries = parse(&data);
             let mut valid = 0;
             let mut invalid = 0;
             let mut change = 0;
-            for line in lines {
-                if line[0] == "+" {
-                    valid += 1;
-                } else if line[0] == "-" {
-                    invalid += 1;
-                } else if line[0] == "*" {
-                    change += 1;
-                } else {
-                    return Err(Error::InvalidEntry(line[0].to_string()));
+            for entry in entries {
+                let entry = entry?;
+                match entry {
+                    Entry::Valid(_) => valid += 1,
+                    Entry::Invalid(_) => invalid += 1,
+                    Entry::Change(_) => change += 1,
                 }
             }
             println!(
@@ -208,28 +256,37 @@ fn main() -> Result<(), Error> {
             account_name,
             format,
         } => {
-            let data = fs::read_to_string(PASSFILE).map_err(Error::PassFile)?;
-            let lines = parse(&data);
-            let valid = lines.iter().filter(|line| line[0] == "+");
-            let mut matched = valid.filter(|line| line[1] == account_name);
-            let matches = matched.clone().count();
-            if matches != 1 {
-                return Err(Error::Mismatch(matches, account_name));
+            let data = read()?;
+            let entries = parse(&data);
+            let mut matched = None;
+            for entry in entries {
+                match entry? {
+                    Entry::Valid(data) => if data.name == account_name {
+                        if let Some(_)= matched {
+                            return Err(Error::Mismatch(account_name));
+                        }
+                        matched = Some(data);
+                    }
+                    _ => {},
+                }
             }
-            let acc = match matched.next() {
-                Some(acc) => acc,
-                _ => return Err(Error::Mismatch(matches, account_name)),
-            };
-            println!("{}", fmt_line(&format, acc));
+
+            if let Some(entry) = matched {
+                println!("{}", fmt_entry(&format, entry));
+            } else {
+                return Err(Error::NoMatches(account_name));
+            }
         }
         Cmd::List { query } => {
-            let data = fs::read_to_string(PASSFILE).map_err(Error::PassFile)?;
-            let lines = parse(&data);
-            let matched = lines.iter().filter(|line| {
-                line[0] == "+" && line[1].to_lowercase().contains(&query.to_lowercase())
-            });
-            for acc in matched {
-                println!("{}", fmt_line(&String::from("%N (%L) %U %P"), &acc));
+            let data = read()?;
+            let entries = parse(&data);
+            for entry in entries {
+                match entry? {
+                    Entry::Valid(data) => if data.name.to_lowercase().contains(&query.to_lowercase()) {
+                        println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
+                    }
+                    _ => {},
+                }
             }
         }
     }
