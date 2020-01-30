@@ -7,6 +7,7 @@ use std::io::{self, Read};
 use std::process;
 use structopt::StructOpt;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 #[derive(Debug, StructOpt)]
 enum Cmd {
@@ -182,7 +183,7 @@ fn main() -> Result<(), Error> {
 
     match opt.command {
         Cmd::Check{ file } => {
-            let data = read(file)?;
+            let mut data = read(file)?;
             let entries = parse(&data);
             let mut valid = 0;
             let mut invalid = 0;
@@ -195,6 +196,7 @@ fn main() -> Result<(), Error> {
                     Entry::Change(_) => change += 1,
                 }
             }
+            data.zeroize();
             println!(
                 "{} current, {} inactive, {} need changing",
                 valid, invalid, change
@@ -262,7 +264,7 @@ fn main() -> Result<(), Error> {
             account_name,
             format,
         } => {
-            let data = read(file)?;
+            let mut data = read(file)?;
             let entries = parse(&data);
             let mut matched = None;
             for entry in entries {
@@ -276,15 +278,15 @@ fn main() -> Result<(), Error> {
                     _ => {},
                 }
             }
-
             if let Some(entry) = matched {
                 println!("{}", fmt_entry(&format, entry));
             } else {
                 return Err(Error::NoMatches(account_name));
             }
+            data.zeroize();
         }
         Cmd::List { file, query } => {
-            let data = read(file)?;
+            let mut data = read(file)?;
             let entries = parse(&data);
             for entry in entries {
                 match entry? {
@@ -294,6 +296,7 @@ fn main() -> Result<(), Error> {
                     _ => {},
                 }
             }
+            data.zeroize();
         }
     }
 
