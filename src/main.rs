@@ -11,11 +11,16 @@ use thiserror::Error;
 #[derive(Debug, StructOpt)]
 enum Cmd {
     #[structopt(about = "Check and print password stats")]
-    Check,
+    Check {
+        #[structopt(help = "Password file")]
+        file: String,
+    },
     #[structopt(name = "gen", about = "Generate a password")]
     Generate,
     #[structopt(about = "Retrieve a password")]
     Get {
+        #[structopt(help = "Password file")]
+        file: String,
         #[structopt(help = "Exact match for an account name")]
         account_name: String,
         #[structopt(help = "Format using %N = Name, %L = Link, %U = Username, %P = Password")]
@@ -23,6 +28,8 @@ enum Cmd {
     },
     #[structopt(name = "ls", about = "Search for passwords")]
     List {
+        #[structopt(help = "Password file")]
+        file: String,
         #[structopt(help = "Query for an account name")]
         query: String,
     },
@@ -36,8 +43,6 @@ struct Pw {
     #[structopt(subcommand)]
     command: Cmd,
 }
-
-static PASSFILE: &str = "/home/fred/Documents/Important/Passwords/Passwords.txt";
 
 #[derive(Error)]
 enum Error {
@@ -158,8 +163,8 @@ fn parse(data: &str) -> impl Iterator<Item = Result<Entry, Error>> {
         .map(|(num, line)| Entry::parse(num + 1, line.split_whitespace()))
 }
 
-fn read() -> Result<String, Error> {
-    fs::read_to_string(PASSFILE).map_err(Error::PassFile)
+fn read(file: String) -> Result<String, Error> {
+    fs::read_to_string(file).map_err(Error::PassFile)
 }
 
 fn main() -> Result<(), Error> {
@@ -176,8 +181,8 @@ fn main() -> Result<(), Error> {
         .try_init()?;
 
     match opt.command {
-        Cmd::Check => {
-            let data = read()?;
+        Cmd::Check{ file } => {
+            let data = read(file)?;
             let entries = parse(&data);
             let mut valid = 0;
             let mut invalid = 0;
@@ -253,10 +258,11 @@ fn main() -> Result<(), Error> {
             }
         },
         Cmd::Get {
+            file,
             account_name,
             format,
         } => {
-            let data = read()?;
+            let data = read(file)?;
             let entries = parse(&data);
             let mut matched = None;
             for entry in entries {
@@ -277,8 +283,8 @@ fn main() -> Result<(), Error> {
                 return Err(Error::NoMatches(account_name));
             }
         }
-        Cmd::List { query } => {
-            let data = read()?;
+        Cmd::List { file, query } => {
+            let data = read(file)?;
             let entries = parse(&data);
             for entry in entries {
                 match entry? {
