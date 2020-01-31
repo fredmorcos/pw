@@ -182,7 +182,7 @@ fn main() -> Result<(), Error> {
         .try_init()?;
 
     match opt.command {
-        Cmd::Check{ file } => {
+        Cmd::Check { file } => {
             let mut data = read(file)?;
             let entries = parse(&data);
             let mut valid = 0;
@@ -269,13 +269,15 @@ fn main() -> Result<(), Error> {
             let mut matched = None;
             for entry in entries {
                 match entry? {
-                    Entry::Valid(data) => if data.name == account_name {
-                        if let Some(_)= matched {
-                            return Err(Error::Mismatch(account_name));
+                    Entry::Valid(data) => {
+                        if data.name == account_name {
+                            if let Some(_) = matched {
+                                return Err(Error::Mismatch(account_name));
+                            }
+                            matched = Some(data);
                         }
-                        matched = Some(data);
                     }
-                    _ => {},
+                    _ => {}
                 }
             }
             if let Some(entry) = matched {
@@ -290,10 +292,12 @@ fn main() -> Result<(), Error> {
             let entries = parse(&data);
             for entry in entries {
                 match entry? {
-                    Entry::Valid(data) => if data.name.to_lowercase().contains(&query.to_lowercase()) {
-                        println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
+                    Entry::Valid(data) => {
+                        if data.name.to_lowercase().contains(&query.to_lowercase()) {
+                            println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
+                        }
                     }
-                    _ => {},
+                    _ => {}
                 }
             }
             data.zeroize();
