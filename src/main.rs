@@ -268,16 +268,13 @@ fn main() -> Result<(), Error> {
             let entries = parse(&data);
             let mut matched = None;
             for entry in entries {
-                match entry? {
-                    Entry::Valid(data) => {
-                        if data.name == account_name {
-                            if let Some(_) = matched {
-                                return Err(Error::Mismatch(account_name));
-                            }
-                            matched = Some(data);
+                if let Entry::Valid(data) = entry? {
+                    if data.name == account_name {
+                        if matched.is_some() {
+                            return Err(Error::Mismatch(account_name));
                         }
+                        matched = Some(data);
                     }
-                    _ => {}
                 }
             }
             if let Some(entry) = matched {
@@ -291,13 +288,10 @@ fn main() -> Result<(), Error> {
             let mut data = read(file)?;
             let entries = parse(&data);
             for entry in entries {
-                match entry? {
-                    Entry::Valid(data) => {
-                        if data.name.to_lowercase().contains(&query.to_lowercase()) {
-                            println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
-                        }
+                if let Entry::Valid(data) = entry? {
+                    if data.name.to_lowercase().contains(&query.to_lowercase()) {
+                        println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
                     }
-                    _ => {}
                 }
             }
             data.zeroize();
