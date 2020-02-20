@@ -22,9 +22,9 @@ enum Cmd {
     Get {
         #[structopt(help = "Password file")]
         file: String,
-        #[structopt(help = "Exact match for an account name")]
-        account_name: String,
-        #[structopt(help = "Format using %N = Name, %L = Link, %U = Username, %P = Password")]
+        #[structopt(name = "account name", help = "Exact match for an account name")]
+        acc: String,
+        #[structopt(help = "Format: %N = Name, %L = Link, %U = Username, %P = Password")]
         format: String,
     },
     #[structopt(name = "ls", about = "Search for passwords")]
@@ -67,17 +67,17 @@ enum Error {
     PwGenSpawn(io::Error),
     #[error("Could not wait on pwgen process: {0}")]
     PwGenWait(io::Error),
-    #[error("Process pwgen failed with exit code {0}")]
+    #[error("Pwgen failed with exit code {0}")]
     PwGenErr(i32),
-    #[error("Process pwgen failed with exit code {0}: {1}")]
+    #[error("Pwgen failed (exit code {0}): {1}")]
     PwGenErrMsg(i32, String),
-    #[error("Process pwgen failed with exit code {0} but could not read its error message: {1}")]
+    #[error("Pwgen failed (exit code {0}) but could not read its error message: {1}")]
     PwGenStderrErr(i32, io::Error),
-    #[error("Process pwgen succeeded but did not generate anything")]
+    #[error("Pwgen succeeded but did not generate anything")]
     PwGenNoStdout,
-    #[error("Process pwgen succeeded but could not read its output: {0}")]
+    #[error("Pwgen succeeded but could not read its output: {0}")]
     PwGenStdoutErr(io::Error),
-    #[error("Process pwgen died from a signal")]
+    #[error("Pwgen died from a signal")]
     PwGenDied,
     #[error("Found more than 1 match for {0}")]
     Mismatch(String),
@@ -168,6 +168,127 @@ fn read(file: String) -> Result<String, Error> {
     fs::read_to_string(file).map_err(Error::PassFile)
 }
 
+fn check(file: String) -> Result<(), Error> {
+    let mut data = read(file)?;
+    let entries = parse(&data);
+    let mut valid = 0;
+    let mut invalid = 0;
+    let mut change = 0;
+    for entry in entries {
+        let entry = entry?;
+        match entry {
+            Entry::Valid(_) => valid += 1,
+            Entry::Invalid(_) => invalid += 1,
+            Entry::Change(_) => change += 1,
+        }
+    }
+    data.zeroize();
+    println!(
+        "{} current, {} inactive, {} need changing",
+        valid, invalid, change
+    );
+    Ok(())
+}
+
+fn generate() -> Result<(), Error> {
+    'gen_loop: loop {
+        let mut child = process::Command::new("pwgen")
+            .args(&["-c", "-n", "-y", "-s", "-B", "-1", "34", "1"])
+            .stdin(process::Stdio::null())
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped())
+            .spawn()
+            .map_err(Error::PwGenSpawn)?;
+
+        let exit_status = child.wait().map_err(Error::PwGenWait)?;
+        if !exit_status.success() {
+            if let Some(code) = exit_status.code() {
+                if let Some(mut err) = child.stderr {
+                    let mut err_str = String::new();
+
+                    if let Err(e) = err.read_to_string(&mut err_str) {
+                        return Err(Error::PwGenStderrErr(code, e));
+                    } else {
+                        let err_str = err_str.trim().to_string();
+                        if err_str.is_empty() {
+                            return Err(Error::PwGenErr(code));
+                        } else {
+                            return Err(Error::PwGenErrMsg(code, err_str));
+                        }
+                    }
+                } else {
+                    return Err(Error::PwGenErr(code));
+                }
+            } else {
+                return Err(Error::PwGenDied);
+            }
+        }
+
+        if let Some(mut out) = child.stdout {
+            let mut out_str = String::new();
+
+            if let Err(e) = out.read_to_string(&mut out_str) {
+                return Err(Error::PwGenStdoutErr(e));
+            } else {
+                let out_str = out_str.trim().to_string();
+
+                if let Some(c) = out_str.chars().next() {
+                    if c.is_ascii_punctuation() {
+                        info!("Password ({}) starts with a symbol", out_str);
+                        continue 'gen_loop;
+                    } else {
+                        println!("{}", out_str);
+                        break 'gen_loop;
+                    }
+                } else {
+                    return Err(Error::PwGenNoStdout);
+                }
+            }
+        } else {
+            return Err(Error::PwGenNoStdout);
+        }
+    }
+
+    Ok(())
+}
+
+fn get(file: String, acc: String, format: String) -> Result<(), Error> {
+    let mut data = read(file)?;
+    let entries = parse(&data);
+    let mut matched = None;
+    for entry in entries {
+        if let Entry::Valid(data) = entry? {
+            if data.name == acc {
+                if matched.is_some() {
+                    return Err(Error::Mismatch(acc));
+                }
+                matched = Some(data);
+            }
+        }
+    }
+    if let Some(entry) = matched {
+        println!("{}", fmt_entry(&format, entry));
+    } else {
+        return Err(Error::NoMatches(acc));
+    }
+    data.zeroize();
+    Ok(())
+}
+
+fn list(file: String, query: String) -> Result<(), Error> {
+    let mut data = read(file)?;
+    let entries = parse(&data);
+    for entry in entries {
+        if let Entry::Valid(data) = entry? {
+            if data.name.to_lowercase().contains(&query.to_lowercase()) {
+                println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
+            }
+        }
+    }
+    data.zeroize();
+    Ok(())
+}
+
 fn main() -> Result<(), Error> {
     let opt = Pw::from_args();
 
@@ -182,120 +303,10 @@ fn main() -> Result<(), Error> {
         .try_init()?;
 
     match opt.command {
-        Cmd::Check { file } => {
-            let mut data = read(file)?;
-            let entries = parse(&data);
-            let mut valid = 0;
-            let mut invalid = 0;
-            let mut change = 0;
-            for entry in entries {
-                let entry = entry?;
-                match entry {
-                    Entry::Valid(_) => valid += 1,
-                    Entry::Invalid(_) => invalid += 1,
-                    Entry::Change(_) => change += 1,
-                }
-            }
-            data.zeroize();
-            println!(
-                "{} current, {} inactive, {} need changing",
-                valid, invalid, change
-            );
-        }
-        Cmd::Generate => 'gen_loop: loop {
-            let mut child = process::Command::new("pwgen")
-                .args(&["-c", "-n", "-y", "-s", "-B", "-1", "34", "1"])
-                .stdin(process::Stdio::null())
-                .stdout(process::Stdio::piped())
-                .stderr(process::Stdio::piped())
-                .spawn()
-                .map_err(Error::PwGenSpawn)?;
-
-            let exit_status = child.wait().map_err(Error::PwGenWait)?;
-            if !exit_status.success() {
-                if let Some(code) = exit_status.code() {
-                    if let Some(mut err) = child.stderr {
-                        let mut err_str = String::new();
-
-                        if let Err(e) = err.read_to_string(&mut err_str) {
-                            return Err(Error::PwGenStderrErr(code, e));
-                        } else {
-                            let err_str = err_str.trim().to_string();
-                            if err_str.is_empty() {
-                                return Err(Error::PwGenErr(code));
-                            } else {
-                                return Err(Error::PwGenErrMsg(code, err_str));
-                            }
-                        }
-                    } else {
-                        return Err(Error::PwGenErr(code));
-                    }
-                } else {
-                    return Err(Error::PwGenDied);
-                }
-            }
-
-            if let Some(mut out) = child.stdout {
-                let mut out_str = String::new();
-
-                if let Err(e) = out.read_to_string(&mut out_str) {
-                    return Err(Error::PwGenStdoutErr(e));
-                } else {
-                    let out_str = out_str.trim().to_string();
-
-                    if let Some(c) = out_str.chars().next() {
-                        if c.is_ascii_punctuation() {
-                            info!("Password ({}) starts with a symbol", out_str);
-                            continue 'gen_loop;
-                        } else {
-                            println!("{}", out_str);
-                            break 'gen_loop;
-                        }
-                    } else {
-                        return Err(Error::PwGenNoStdout);
-                    }
-                }
-            } else {
-                return Err(Error::PwGenNoStdout);
-            }
-        },
-        Cmd::Get {
-            file,
-            account_name,
-            format,
-        } => {
-            let mut data = read(file)?;
-            let entries = parse(&data);
-            let mut matched = None;
-            for entry in entries {
-                if let Entry::Valid(data) = entry? {
-                    if data.name == account_name {
-                        if matched.is_some() {
-                            return Err(Error::Mismatch(account_name));
-                        }
-                        matched = Some(data);
-                    }
-                }
-            }
-            if let Some(entry) = matched {
-                println!("{}", fmt_entry(&format, entry));
-            } else {
-                return Err(Error::NoMatches(account_name));
-            }
-            data.zeroize();
-        }
-        Cmd::List { file, query } => {
-            let mut data = read(file)?;
-            let entries = parse(&data);
-            for entry in entries {
-                if let Entry::Valid(data) = entry? {
-                    if data.name.to_lowercase().contains(&query.to_lowercase()) {
-                        println!("{}", fmt_entry(&String::from("%N (%L) %U %P"), data));
-                    }
-                }
-            }
-            data.zeroize();
-        }
+        Cmd::Check { file } => check(file)?,
+        Cmd::Generate => generate()?,
+        Cmd::Get { file, acc, format } => get(file, acc, format)?,
+        Cmd::List { file, query } => list(file, query)?,
     }
 
     Ok(())
