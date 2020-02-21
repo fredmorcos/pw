@@ -183,10 +183,12 @@ fn check(file: String) -> Result<(), Error> {
         }
     }
     data.zeroize();
+
     println!(
         "{} current, {} inactive, {} need changing",
         valid, invalid, change
     );
+
     Ok(())
 }
 
@@ -303,11 +305,9 @@ fn main() -> Result<(), Error> {
         .try_init()?;
 
     match opt.command {
-        Cmd::Check { file } => check(file)?,
-        Cmd::Generate => generate()?,
-        Cmd::Get { file, acc, format } => get(file, acc, format)?,
-        Cmd::List { file, query } => list(file, query)?,
+        Cmd::Check { file } => check(file),
+        Cmd::Generate => generate(),
+        Cmd::Get { file, acc, format } => get(file, acc, format),
+        Cmd::List { file, query } => list(file, query),
     }
-
-    Ok(())
 }
