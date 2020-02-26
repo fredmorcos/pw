@@ -296,8 +296,9 @@ fn list(file: PathBuf, query: String) -> Result<(), Error> {
 }
 
 fn default_passfile() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let passfile = home.join(".passfile");
+    let mut passfile = dirs::home_dir()?;
+
+    passfile.push(".passfile");
 
     if passfile.is_file() {
         return Some(passfile);
