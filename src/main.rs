@@ -4,6 +4,8 @@ use log::info;
 use std::fmt::{self, Debug};
 use std::fs;
 use std::io::{self, Read};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use structopt::StructOpt;
 use thiserror::Error;
@@ -14,25 +16,25 @@ enum Cmd {
     #[structopt(about = "Check and print password stats")]
     Check {
         #[structopt(help = "Password file")]
-        file: String,
+        file: Option<PathBuf>,
     },
     #[structopt(name = "gen", about = "Generate a password")]
     Generate,
     #[structopt(about = "Retrieve a password")]
     Get {
-        #[structopt(help = "Password file")]
-        file: String,
         #[structopt(name = "account name", help = "Exact match for an account name")]
         acc: String,
         #[structopt(help = "Format: %N = Name, %L = Link, %U = Username, %P = Password")]
         format: String,
+        #[structopt(help = "Password file")]
+        file: Option<PathBuf>,
     },
     #[structopt(name = "ls", about = "Search for passwords")]
     List {
-        #[structopt(help = "Password file")]
-        file: String,
         #[structopt(help = "Query for an account name")]
         query: String,
+        #[structopt(help = "Password file")]
+        file: Option<PathBuf>,
     },
 }
 
@@ -83,6 +85,8 @@ enum Error {
     Mismatch(String),
     #[error("No matches found for {0}")]
     NoMatches(String),
+    #[error("No default password file found in HOME/.passfile")]
+    NoPassFile,
 }
 
 impl Debug for Error {
@@ -164,11 +168,11 @@ fn parse(data: &str) -> impl Iterator<Item = Result<Entry, Error>> {
         .map(|(num, line)| Entry::parse(num + 1, line.split_whitespace()))
 }
 
-fn read(file: String) -> Result<String, Error> {
+fn read<P: AsRef<Path>>(file: P) -> Result<String, Error> {
     fs::read_to_string(file).map_err(Error::PassFile)
 }
 
-fn check(file: String) -> Result<(), Error> {
+fn check(file: PathBuf) -> Result<(), Error> {
     let mut data = read(file)?;
     let entries = parse(&data);
     let mut valid = 0;
@@ -254,7 +258,7 @@ fn generate() -> Result<(), Error> {
     Ok(())
 }
 
-fn get(file: String, acc: String, format: String) -> Result<(), Error> {
+fn get(file: PathBuf, acc: String, format: String) -> Result<(), Error> {
     let mut data = read(file)?;
     let entries = parse(&data);
     let mut matched = None;
@@ -277,7 +281,7 @@ fn get(file: String, acc: String, format: String) -> Result<(), Error> {
     Ok(())
 }
 
-fn list(file: String, query: String) -> Result<(), Error> {
+fn list(file: PathBuf, query: String) -> Result<(), Error> {
     let mut data = read(file)?;
     let entries = parse(&data);
     for entry in entries {
@@ -289,6 +293,28 @@ fn list(file: String, query: String) -> Result<(), Error> {
     }
     data.zeroize();
     Ok(())
+}
+
+fn default_passfile() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let passfile = home.join(".passfile");
+
+    if passfile.is_file() {
+        return Some(passfile);
+    }
+
+    None
+}
+
+fn get_passfile(file: Option<PathBuf>) -> Result<PathBuf, Error> {
+    let file = file.or_else(default_passfile);
+
+    if let Some(file) = file {
+        info!("Found password file at {}", file.display());
+        Ok(file)
+    } else {
+        Err(Error::NoPassFile)
+    }
 }
 
 fn main() -> Result<(), Error> {
@@ -305,9 +331,9 @@ fn main() -> Result<(), Error> {
         .try_init()?;
 
     match opt.command {
-        Cmd::Check { file } => check(file),
+        Cmd::Check { file } => check(get_passfile(file)?),
         Cmd::Generate => generate(),
-        Cmd::Get { file, acc, format } => get(file, acc, format),
-        Cmd::List { file, query } => list(file, query),
+        Cmd::Get { file, acc, format } => get(get_passfile(file)?, acc, format),
+        Cmd::List { file, query } => list(get_passfile(file)?, query),
     }
 }
