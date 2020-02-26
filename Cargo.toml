@@ -11,6 +11,7 @@ structopt = "0.3.7"
 log = "0.4.8"
 env_logger = "0.7.1"
 thiserror = "1.0"
+dirs = "2.0.2"
 zeroize = "1.1.0"
 # derive_more = "0.15.0"
 
