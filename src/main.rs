@@ -240,11 +240,18 @@ fn generate() -> Result<(), Error> {
 
                 if let Some(c) = out_str.chars().next() {
                     if c.is_ascii_punctuation() {
-                        info!("Password ({}) starts with a symbol", out_str);
+                        info!("Password ({}) starts with a symbol (skip)", out_str);
                         continue 'gen_loop;
                     } else {
-                        println!("{}", out_str);
-                        break 'gen_loop;
+                        if let Some(c) = out_str.chars().last() {
+                            if c.is_ascii_punctuation() {
+                                info!("Password ({}) ends with a symbol (skip)", out_str);
+                                continue 'gen_loop;
+                            } else {
+                                println!("{}", out_str);
+                                break 'gen_loop;
+                            }
+                        }
                     }
                 } else {
                     return Err(Error::PwGenNoStdout);
