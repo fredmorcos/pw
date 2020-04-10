@@ -16,6 +16,7 @@ zeroize = "1.1.0"
 # derive_more = "0.15.0"
 
 [profile.release]
+target-cpu = "native"
 lto = true
-panic = 'abort'
+panic = "abort"
 codegen-units = 1
